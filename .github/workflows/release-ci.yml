@@ -1,85 +1,88 @@
-# SPDX-FileCopyrightText: 2015 - 2024 Rime community
-#
-# SPDX-License-Identifier: GPL-3.0-or-later
-
-name: Release
-on:
-  workflow_dispatch:
-  push:
-    tags:
-      - 'v*'
 env:
   CI_NAME: Release CI
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
+    - continue-on-error: true
+      name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        submodules: recursive
+    - continue-on-error: true
+      name: Setup Java
+      uses: actions/setup-java@v4
+      with:
+        cache: gradle
+        distribution: temurin
+        java-version: 17
+    - continue-on-error: true
+      id: cache-hash
+      name: Calculate JNI cache hash
+      run: './gradlew :app:calculateNativeCacheHash
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: "temurin"
-          java-version: 17
-          # will restore cache of dependencies and wrappers
-          cache: 'gradle'
+        '
+    - continue-on-error: true
+      id: jni-cache
+      name: Fetch JNI cache
+      uses: actions/cache@v4
+      with:
+        key: ${{ runner.os }}-trime-jni-release-${{ steps.cache-hash.outputs.native-cache-hash
+          }}
+        path: app/prebuilt
+    - continue-on-error: true
+      name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+    - continue-on-error: true
+      name: Setup keystore
+      run: 'echo ${{ secrets.SIGNING_KEY }} | base64 --decode | cat >> $(pwd)/signingkey.jks
 
-      - name: Calculate JNI cache hash
-        id: cache-hash
-        run: |
-            ./gradlew :app:calculateNativeCacheHash
+        cat << EOF > keystore.properties
 
-      - name: Fetch JNI cache
-        uses: actions/cache@v4
-        id: jni-cache
-        with:
-          path: "app/prebuilt"
-          key: ${{ runner.os }}-trime-jni-release-${{ steps.cache-hash.outputs.native-cache-hash }}
+        storeFile=$(pwd)/signingkey.jks
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        storePassword=${{ secrets.KEY_STORE_PASSWORD }}
 
-      - name: Setup keystore
-        run: |
-          echo ${{ secrets.SIGNING_KEY }} | base64 --decode | cat >> $(pwd)/signingkey.jks
-          cat << EOF > keystore.properties
-          storeFile=$(pwd)/signingkey.jks
-          storePassword=${{ secrets.KEY_STORE_PASSWORD }}
-          keyAlias=${{ secrets.ALIAS }}
-          keyPassword=${{ secrets.KEY_PASSWORD }}
-          EOF
+        keyAlias=${{ secrets.ALIAS }}
 
-      - name: Build Trime
-        run: make release
+        keyPassword=${{ secrets.KEY_PASSWORD }}
 
-      - name: Add JNI cache
-        if: ${{ !steps.jni-cache.outputs.cache-hit }}
-        run: cp -R app/build/intermediates/stripped_native_libs/release/out/lib app/prebuilt
+        EOF
 
-      - name: Build changelog
-        id: build_changelog
-        uses: mikepenz/release-changelog-builder-action@v4
-        with:
-          commitMode: true
-          ignorePreReleases: true
-          configurationJson: |
-            {
-              "template": "Change log from #{{FROM_TAG}} to #{{TO_TAG}}: #{{RELEASE_DIFF}}\n#{{UNCATEGORIZED}}",
-              "pr_template": "- [#{{MERGE_SHA}}] - #{{TITLE}}"
-            }
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        '
+    - continue-on-error: true
+      name: Build Trime
+      run: make release
+    - continue-on-error: true
+      if: ${{ !steps.jni-cache.outputs.cache-hit }}
+      name: Add JNI cache
+      run: cp -R app/build/intermediates/stripped_native_libs/release/out/lib app/prebuilt
+    - continue-on-error: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      id: build_changelog
+      name: Build changelog
+      uses: mikepenz/release-changelog-builder-action@v4
+      with:
+        commitMode: true
+        configurationJson: "{\n  \"template\": \"Change log from #{{FROM_TAG}} to\
+          \ #{{TO_TAG}}: #{{RELEASE_DIFF}}\\n#{{UNCATEGORIZED}}\",\n  \"pr_template\"\
+          : \"- [#{{MERGE_SHA}}] - #{{TITLE}}\"\n}\n"
+        ignorePreReleases: true
+    - continue-on-error: true
+      name: Create Stable release
+      uses: ncipollo/release-action@v1
+      with:
+        allowUpdates: true
+        artifacts: app/build/outputs/apk/release/*.apk
+        body: '${{ steps.build_changelog.outputs.changelog }}
 
-      - name: Create Stable release
-        uses: ncipollo/release-action@v1
-        with:
-          allowUpdates: true
-          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}
-          artifacts: "app/build/outputs/apk/release/*.apk"
-          body: |
-            ${{ steps.build_changelog.outputs.changelog }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+          '
+        prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name,
+          'beta') }}
+        token: ${{ secrets.GITHUB_TOKEN }}
+name: Release
+on:
+  repository_dispatch:
+    types: trigger-ga___release-ci.yml
